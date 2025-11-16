@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Optional
 
 import ffmpeg
-import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -85,75 +84,16 @@ class HDRFrameExtractor:
                                    range='limited')
         return stream
 
-    def _get_chunk_boundaries(self, chunk_size_gb: float) -> list[dict]:
-        """Calculate chunk boundaries based on file size."""
-        chunk_size_bytes = chunk_size_gb * (1024 ** 3)
-        num_chunks = int(np.ceil(self._file_size_bytes / chunk_size_bytes))
-
-        chunks = []
-        for i in range(num_chunks):
-            start_ratio = (i * chunk_size_bytes) / self._file_size_bytes
-            end_ratio = min(((i + 1) * chunk_size_bytes) / self._file_size_bytes, 1.0)
-
-            chunks.append({
-                'chunk_index': i,
-                'start_time': start_ratio * self._duration,
-                'end_time': end_ratio * self._duration,
-            })
-
-        return chunks
-
-    def _extract_chunk_to_files(
-        self,
-        output_path: Path,
-        start_time: float,
-        end_time: float,
-        output_format: str,
-        pix_fmt: str,
-        preserve_hdr: bool,
-        tonemap_method: Optional[str],
-        frame_offset: int
-    ) -> int:
-        """Extract frames from a specific time chunk to files."""
-        stream = ffmpeg.input(str(self.input_file), ss=start_time)
-
-        chunk_duration = end_time - start_time
-        stream = stream.filter('trim', duration=chunk_duration)
-        stream = stream.filter('setpts', 'PTS-STARTPTS')
-
-        stream = self._apply_color_processing(stream, preserve_hdr, tonemap_method)
-
-        output_pattern = str(output_path / f'frame_%06d.{output_format}')
-
-        # Use start_number to continue frame numbering from previous chunks
-        stream = ffmpeg.output(
-            stream,
-            output_pattern,
-            pix_fmt=pix_fmt,
-            start_number=frame_offset,
-            **{'qscale:v': 1}
-        )
-
-        ffmpeg.run(stream, overwrite_output=True, capture_stdout=True, capture_stderr=True)
-
-        # Count extracted frames
-        extracted_frames = len(list(output_path.glob(f'frame_*.{output_format}')))
-        return extracted_frames - frame_offset
-
     def extract_frames_to_files(
         self,
         output_dir: str,
         output_format: str = 'png',
         pix_fmt: str = 'rgb48be',
         preserve_hdr: bool = True,
-        tonemap_method: Optional[str] = None,
-        chunk_size_gb: float = 10.0
+        tonemap_method: Optional[str] = None
     ) -> None:
         """
         Extract all frames from video and save to individual files.
-
-        This is the main entry point for frame extraction. For large files,
-        processing is automatically chunked to manage memory efficiently.
 
         Args:
             output_dir: Directory to save extracted frames
@@ -162,55 +102,21 @@ class HDRFrameExtractor:
             preserve_hdr: If True, preserve HDR metadata and color space
             tonemap_method: Tone mapping algorithm if converting to SDR
                            ('hable', 'reinhard', 'mobius')
-            chunk_size_gb: Internal chunk size for large files (default 10 GB)
         """
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        file_size_gb = self._file_size_bytes / (1024 ** 3)
+        logger.info(f"Extracting frames to {output_dir}")
+        stream = ffmpeg.input(str(self.input_file))
+        stream = self._apply_color_processing(stream, preserve_hdr, tonemap_method)
 
-        # For small files, extract directly without chunking
-        if file_size_gb <= chunk_size_gb:
-            logger.info(f"Extracting frames to {output_dir}")
-            stream = ffmpeg.input(str(self.input_file))
-            stream = self._apply_color_processing(stream, preserve_hdr, tonemap_method)
+        output_pattern = str(output_path / f'frame_%06d.{output_format}')
+        stream = ffmpeg.output(
+            stream,
+            output_pattern,
+            pix_fmt=pix_fmt,
+            **{'qscale:v': 1}
+        )
 
-            output_pattern = str(output_path / f'frame_%06d.{output_format}')
-            stream = ffmpeg.output(
-                stream,
-                output_pattern,
-                pix_fmt=pix_fmt,
-                **{'qscale:v': 1}
-            )
-
-            ffmpeg.run(stream, overwrite_output=True, capture_stdout=True, capture_stderr=True)
-            logger.info("Frame extraction complete")
-            return
-
-        # For large files, process in chunks automatically
-        chunks = self._get_chunk_boundaries(chunk_size_gb)
-        logger.info(f"Large file detected ({file_size_gb:.2f} GB). "
-                   f"Processing in {len(chunks)} chunks...")
-
-        total_frames = 0
-        for chunk in chunks:
-            chunk_idx = chunk['chunk_index']
-            logger.info(f"Processing chunk {chunk_idx + 1}/{len(chunks)}: "
-                       f"{chunk['start_time']:.2f}s - {chunk['end_time']:.2f}s")
-
-            frames_in_chunk = self._extract_chunk_to_files(
-                output_path=output_path,
-                start_time=chunk['start_time'],
-                end_time=chunk['end_time'],
-                output_format=output_format,
-                pix_fmt=pix_fmt,
-                preserve_hdr=preserve_hdr,
-                tonemap_method=tonemap_method,
-                frame_offset=total_frames
-            )
-
-            total_frames += frames_in_chunk
-            logger.info(f"Chunk {chunk_idx + 1} complete. "
-                       f"Extracted {frames_in_chunk} frames (total: {total_frames})")
-
-        logger.info(f"Frame extraction complete. Total frames: {total_frames}")
+        ffmpeg.run(stream, overwrite_output=True, capture_stdout=True, capture_stderr=True)
+        logger.info("Frame extraction complete")
