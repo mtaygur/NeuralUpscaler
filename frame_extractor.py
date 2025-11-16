@@ -249,7 +249,3 @@ def example_usage():
         # Break after a few frames for demonstration
         if i >= 5:
             break
-
-
-if __name__ == '__main__':
-    example_usage()
