@@ -155,37 +155,6 @@ class HDRFrameExtractor:
             process.wait()
             logger.info(f"Total frames processed: {frame_count}")
 
-    def extract_frames_batch(
-        self,
-        batch_size: int = 30,
-        pix_fmt: str = 'rgb48le',
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None
-    ) -> Generator[np.ndarray, None, None]:
-        """
-        Extract frames in batches for efficient processing.
-
-        Args:
-            batch_size: Number of frames per batch
-            pix_fmt: Pixel format
-            start_time: Start time in seconds
-            end_time: End time in seconds
-
-        Yields:
-            numpy.ndarray: Batch of frames with shape (batch_size, height, width, 3)
-        """
-        batch = []
-
-        for frame in self.extract_frames_generator(pix_fmt, start_time, end_time):
-            batch.append(frame)
-
-            if len(batch) == batch_size:
-                yield np.array(batch)
-                batch = []
-
-        # Yield remaining frames
-        if batch:
-            yield np.array(batch)
 
 
 def example_usage():
@@ -194,30 +163,28 @@ def example_usage():
     # Initialize extractor
     extractor = HDRFrameExtractor('input_video.mkv')
 
-    # Method 1: Extract frames to files (good for storage)
+    # Method 1: Extract frames to files (saves to disk, minimal memory usage)
+    # Good if you need to store frames for later processing
     # extractor.extract_frames_to_files(
     #     output_dir='frames_output',
     #     format='png',
     #     pix_fmt='rgb48be'  # 16-bit RGB for HDR
     # )
 
-    # Method 2: Process frames on-the-fly (memory efficient)
+    # Method 2: Stream frames one at a time (MEMORY EFFICIENT)
+    # Only one frame is in memory at a time (~50MB for 4K HDR)
+    # Perfect for processing large 50GB+ video files
     for i, frame in enumerate(extractor.extract_frames_generator(pix_fmt='rgb48le')):
         # Process frame here
         print(f"Processing frame {i}: shape={frame.shape}, dtype={frame.dtype}")
 
-        # Example: Apply your post-processing
-        # processed_frame = your_processing_function(frame)
+        # Example: Apply your post-processing to this single frame
+        # processed_frame = your_postprocessing_function(frame)
+        # save_processed_frame(processed_frame, f'output_{i:06d}.png')
 
         # Break after a few frames for demonstration
         if i >= 5:
             break
-
-    # Method 3: Process in batches (good for GPU processing)
-    # for batch_idx, batch in enumerate(extractor.extract_frames_batch(batch_size=30)):
-    #     print(f"Processing batch {batch_idx}: shape={batch.shape}")
-    #     # Process batch with your neural network
-    #     # results = model.process(batch)
 
 
 if __name__ == '__main__':
