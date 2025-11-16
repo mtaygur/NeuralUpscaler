@@ -50,7 +50,9 @@ class HDRFrameExtractor:
         format: str = 'png',
         start_frame: Optional[int] = None,
         end_frame: Optional[int] = None,
-        pix_fmt: str = 'rgb48be'  # 16-bit RGB for HDR preservation
+        pix_fmt: str = 'rgb48be',  # 16-bit RGB for HDR preservation
+        preserve_hdr: bool = True,
+        tonemap_method: Optional[str] = None  # 'hable', 'reinhard', 'mobius', etc.
     ) -> None:
         """
         Extract frames and save to individual files.
@@ -61,6 +63,8 @@ class HDRFrameExtractor:
             start_frame: Starting frame number (None for beginning)
             end_frame: Ending frame number (None for end of video)
             pix_fmt: Pixel format for output (rgb48be for 16-bit HDR)
+            preserve_hdr: If True, preserve HDR metadata and color space (no tone mapping)
+            tonemap_method: Tone mapping algorithm if converting to SDR ('hable', 'reinhard', 'mobius')
         """
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -73,6 +77,27 @@ class HDRFrameExtractor:
             stream = stream.filter('select', f'gte(n,{start_frame})')
         if end_frame is not None:
             stream = stream.filter('select', f'lte(n,{end_frame})')
+
+        # Apply tone mapping if requested
+        if tonemap_method and not preserve_hdr:
+            logger.info(f"Applying {tonemap_method} tone mapping")
+            stream = stream.filter('zscale',
+                                   transfer='linear',
+                                   npl=100)
+            stream = stream.filter('tonemap', tonemap_method)
+            stream = stream.filter('zscale',
+                                   transfer='bt709',
+                                   matrix='bt709',
+                                   primaries='bt709',
+                                   range='limited')
+        elif preserve_hdr:
+            # Preserve HDR10 color space and transfer characteristics
+            logger.info("Preserving HDR10 metadata (BT.2020, PQ transfer)")
+            stream = stream.filter('zscale',
+                                   matrix='bt2020nc',
+                                   transfer='smpte2084',  # PQ transfer for HDR10
+                                   primaries='bt2020',
+                                   range='limited')
 
         # Output with HDR-compatible pixel format
         output_pattern = str(output_path / f'frame_%06d.{format}')
@@ -91,7 +116,9 @@ class HDRFrameExtractor:
         self,
         pix_fmt: str = 'rgb48le',  # 16-bit RGB for HDR
         start_time: Optional[float] = None,
-        end_time: Optional[float] = None
+        end_time: Optional[float] = None,
+        preserve_hdr: bool = True,
+        tonemap_method: Optional[str] = None
     ) -> Generator[np.ndarray, None, None]:
         """
         Extract frames as numpy arrays using a generator (memory efficient).
@@ -100,6 +127,8 @@ class HDRFrameExtractor:
             pix_fmt: Pixel format ('rgb48le' for 16-bit RGB, 'rgb24' for 8-bit)
             start_time: Start time in seconds
             end_time: End time in seconds
+            preserve_hdr: If True, preserve HDR metadata and color space (no tone mapping)
+            tonemap_method: Tone mapping algorithm if converting to SDR ('hable', 'reinhard', 'mobius')
 
         Yields:
             numpy.ndarray: Frame data as numpy array
@@ -120,6 +149,27 @@ class HDRFrameExtractor:
             stream = stream.filter('trim', start=start_time)
         if end_time is not None:
             stream = stream.filter('trim', end=end_time)
+
+        # Apply tone mapping if requested
+        if tonemap_method and not preserve_hdr:
+            logger.info(f"Applying {tonemap_method} tone mapping")
+            stream = stream.filter('zscale',
+                                   transfer='linear',
+                                   npl=100)
+            stream = stream.filter('tonemap', tonemap_method)
+            stream = stream.filter('zscale',
+                                   transfer='bt709',
+                                   matrix='bt709',
+                                   primaries='bt709',
+                                   range='limited')
+        elif preserve_hdr:
+            # Preserve HDR10 color space and transfer characteristics
+            logger.info("Preserving HDR10 metadata (BT.2020, PQ transfer)")
+            stream = stream.filter('zscale',
+                                   matrix='bt2020nc',
+                                   transfer='smpte2084',  # PQ transfer for HDR10
+                                   primaries='bt2020',
+                                   range='limited')
 
         # Output to pipe
         stream = ffmpeg.output(stream, 'pipe:', format='rawvideo', pix_fmt=pix_fmt)
@@ -163,20 +213,34 @@ def example_usage():
     # Initialize extractor
     extractor = HDRFrameExtractor('input_video.mkv')
 
-    # Method 1: Extract frames to files (saves to disk, minimal memory usage)
-    # Good if you need to store frames for later processing
+    # Method 1: Extract frames to files with HDR preservation (default)
+    # Preserves BT.2020 color space and PQ (SMPTE ST 2084) transfer function
     # extractor.extract_frames_to_files(
-    #     output_dir='frames_output',
+    #     output_dir='frames_hdr',
     #     format='png',
-    #     pix_fmt='rgb48be'  # 16-bit RGB for HDR
+    #     pix_fmt='rgb48be',  # 16-bit RGB for HDR
+    #     preserve_hdr=True   # Keeps HDR10 metadata
     # )
 
-    # Method 2: Stream frames one at a time (MEMORY EFFICIENT)
+    # Method 2: Extract with tone mapping to SDR
+    # extractor.extract_frames_to_files(
+    #     output_dir='frames_sdr',
+    #     format='png',
+    #     pix_fmt='rgb24',  # 8-bit RGB for SDR
+    #     preserve_hdr=False,
+    #     tonemap_method='hable'  # Options: 'hable', 'reinhard', 'mobius'
+    # )
+
+    # Method 3: Stream frames one at a time (MEMORY EFFICIENT)
     # Only one frame is in memory at a time (~50MB for 4K HDR)
     # Perfect for processing large 50GB+ video files
-    for i, frame in enumerate(extractor.extract_frames_generator(pix_fmt='rgb48le')):
-        # Process frame here
+    for i, frame in enumerate(extractor.extract_frames_generator(
+        pix_fmt='rgb48le',
+        preserve_hdr=True  # Preserve HDR10 color space (BT.2020, PQ)
+    )):
+        # Process frame here - frame contains LINEAR HDR data in BT.2020 color space
         print(f"Processing frame {i}: shape={frame.shape}, dtype={frame.dtype}")
+        # Values range from 0-65535 for 16-bit HDR (maps to 0.0-1.0+ in linear space)
 
         # Example: Apply your post-processing to this single frame
         # processed_frame = your_postprocessing_function(frame)
