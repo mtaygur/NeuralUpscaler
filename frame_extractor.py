@@ -85,7 +85,7 @@ class HDRFrameExtractor:
     def extract_frames_to_files(
         self,
         output_dir: str,
-        format: str = 'png',
+        output_format: str = 'png',
         start_frame: Optional[int] = None,
         end_frame: Optional[int] = None,
         pix_fmt: str = 'rgb48be',  # 16-bit RGB for HDR preservation
@@ -97,7 +97,7 @@ class HDRFrameExtractor:
 
         Args:
             output_dir: Directory to save extracted frames
-            format: Output format ('png', 'tiff', 'exr')
+            output_format: Output format ('png', 'tiff', 'exr')
             start_frame: Starting frame number (None for beginning)
             end_frame: Ending frame number (None for end of video)
             pix_fmt: Pixel format for output (rgb48be for 16-bit HDR)
@@ -120,7 +120,7 @@ class HDRFrameExtractor:
         stream = self._apply_color_processing(stream, preserve_hdr, tonemap_method)
 
         # Output with HDR-compatible pixel format
-        output_pattern = str(output_path / f'frame_%06d.{format}')
+        output_pattern = str(output_path / f'frame_%06d.{output_format}')
         stream = ffmpeg.output(
             stream,
             output_pattern,
