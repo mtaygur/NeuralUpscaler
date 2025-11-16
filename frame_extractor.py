@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Allowed values for subprocess command parameters (prevents injection)
 ALLOWED_TONEMAP_METHODS = {'hable', 'reinhard', 'mobius'}
-ALLOWED_PIXEL_FORMATS = {'rgb48be', 'rgb24', 'yuv420p10le'}
+ALLOWED_PIXEL_FORMATS = {'rgb48be', 'rgb48le', 'rgb24'}  # RGB formats only, 48-bit uses 2 bytes/channel
 ALLOWED_OUTPUT_FORMATS = {'png', 'tiff', 'exr'}
 
 
@@ -193,9 +193,10 @@ class HDRFrameExtractor:
         logger.info(f"Batch size: {batch_size}, Workers: {num_workers}")
 
         # Determine frame size based on pixel format
-        bytes_per_channel = 2 if pix_fmt == 'rgb48be' else 1
+        is_16bit = pix_fmt in ('rgb48be', 'rgb48le')
+        bytes_per_channel = 2 if is_16bit else 1
         frame_size = self.width * self.height * 3 * bytes_per_channel
-        dtype = np.uint16 if pix_fmt == 'rgb48be' else np.uint8
+        dtype = np.uint16 if is_16bit else np.uint8
 
         # Start FFmpeg process
         # shell=False ensures arguments are passed directly to ffmpeg without shell interpretation,
