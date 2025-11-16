@@ -281,45 +281,6 @@ class FrameQualityFilter:
         metrics = self.assess_quality(frame)
         return metrics.passes_all
 
-    def filter_frames(self, frames_generator, verbose: bool = False):
-        """
-        Filter frames from a generator, yielding only high-quality frames.
-
-        Args:
-            frames_generator: Generator yielding frames
-            verbose: If True, print quality metrics for each frame
-
-        Yields:
-            High-quality frames that pass all quality checks
-        """
-        total_frames = 0
-        kept_frames = 0
-
-        for frame in frames_generator:
-            total_frames += 1
-            metrics = self.assess_quality(frame)
-
-            if verbose:
-                print(f"\nFrame {total_frames}:")
-                print(f"  Blur score: {metrics.blur_score:.2f} {'❌ BLURRY' if metrics.is_blurry else '✓'}")
-                print(f"  BRISQUE score: {metrics.brisque_score:.2f} {'❌ ARTIFACTS' if metrics.has_artifacts else '✓'}")
-                print(f"  Brightness: {metrics.mean_brightness:.2f} {'❌ TOO DARK' if metrics.is_too_dark else '❌ TOO BRIGHT' if metrics.is_too_bright else '✓'}")
-                print(f"  Contrast: {metrics.contrast:.2f} {'❌ LOW CONTRAST' if metrics.is_low_contrast else '✓'}")
-                print(f"  Result: {'✓ KEEP' if metrics.passes_all else '❌ DISCARD'}")
-
-            if metrics.passes_all:
-                kept_frames += 1
-                yield frame
-
-        if verbose or total_frames > 0:
-            print(f"\n{'='*60}")
-            print(f"Quality Filtering Summary:")
-            print(f"  Total frames: {total_frames}")
-            print(f"  Kept frames: {kept_frames}")
-            print(f"  Discarded frames: {total_frames - kept_frames}")
-            print(f"  Keep rate: {kept_frames/total_frames*100:.1f}%")
-            print(f"{'='*60}")
-
 
 def create_default_filter() -> FrameQualityFilter:
     """
