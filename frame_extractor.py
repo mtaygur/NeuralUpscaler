@@ -168,7 +168,7 @@ class HDRFrameExtractor:
         # Build FFmpeg command for raw video output
         cmd = self._build_ffmpeg_pipe_command(preserve_hdr, tonemap_method, pix_fmt)
 
-        logger.info(f"Starting streaming extraction with quality filtering")
+        logger.info("Starting streaming extraction with quality filtering")
         logger.info(f"Batch size: {batch_size}, Workers: {num_workers}")
 
         # Determine frame size based on pixel format
@@ -217,7 +217,7 @@ class HDRFrameExtractor:
                         futures.append((frame_num + i, frame, future))
 
                     # Collect results and write passing frames
-                    for original_idx, frame, future in futures:
+                    for frame, future in futures:
                         passes_quality = future.result()
                         if passes_quality:
                             output_file = output_path / f'frame_{kept_count + 1:06d}.{output_format}'
