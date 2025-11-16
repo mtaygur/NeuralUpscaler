@@ -18,6 +18,11 @@ from frame_quality_filter import FrameQualityFilter
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Allowed values for subprocess command parameters (prevents injection)
+ALLOWED_TONEMAP_METHODS = {'hable', 'reinhard', 'mobius'}
+ALLOWED_PIXEL_FORMATS = {'rgb48be', 'rgb24', 'yuv420p10le'}
+ALLOWED_OUTPUT_FORMATS = {'png', 'tiff', 'exr'}
+
 
 class HDRFrameExtractor:
     """Extract frames from 4K HDR10 MKV files."""
@@ -109,6 +114,14 @@ class HDRFrameExtractor:
             tonemap_method: Tone mapping algorithm if converting to SDR
                            ('hable', 'reinhard', 'mobius')
         """
+        # Validate parameters against allowed values
+        if output_format not in ALLOWED_OUTPUT_FORMATS:
+            raise ValueError(f"output_format must be one of {ALLOWED_OUTPUT_FORMATS}")
+        if pix_fmt not in ALLOWED_PIXEL_FORMATS:
+            raise ValueError(f"pix_fmt must be one of {ALLOWED_PIXEL_FORMATS}")
+        if tonemap_method is not None and tonemap_method not in ALLOWED_TONEMAP_METHODS:
+            raise ValueError(f"tonemap_method must be one of {ALLOWED_TONEMAP_METHODS}")
+
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
@@ -158,6 +171,14 @@ class HDRFrameExtractor:
             Number of frames that passed quality filtering
         """
         import os
+
+        # Validate parameters against allowed values
+        if output_format not in ALLOWED_OUTPUT_FORMATS:
+            raise ValueError(f"output_format must be one of {ALLOWED_OUTPUT_FORMATS}")
+        if pix_fmt not in ALLOWED_PIXEL_FORMATS:
+            raise ValueError(f"pix_fmt must be one of {ALLOWED_PIXEL_FORMATS}")
+        if tonemap_method is not None and tonemap_method not in ALLOWED_TONEMAP_METHODS:
+            raise ValueError(f"tonemap_method must be one of {ALLOWED_TONEMAP_METHODS}")
 
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
