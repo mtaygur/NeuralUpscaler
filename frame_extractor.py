@@ -44,6 +44,44 @@ class HDRFrameExtractor:
 
         logger.info(f"Video info: {self.width}x{self.height} @ {self.fps:.2f}fps, {self.pix_fmt}")
 
+    def _apply_color_processing(
+        self,
+        stream,
+        preserve_hdr: bool = True,
+        tonemap_method: Optional[str] = None
+    ):
+        """
+        Apply HDR preservation or tone mapping filters to the stream.
+
+        Args:
+            stream: ffmpeg stream object
+            preserve_hdr: If True, preserve HDR metadata and color space
+            tonemap_method: Tone mapping algorithm if converting to SDR
+
+        Returns:
+            Modified ffmpeg stream
+        """
+        if tonemap_method and not preserve_hdr:
+            logger.info(f"Applying {tonemap_method} tone mapping")
+            stream = stream.filter('zscale',
+                                   transfer='linear',
+                                   npl=100)
+            stream = stream.filter('tonemap', tonemap_method)
+            stream = stream.filter('zscale',
+                                   transfer='bt709',
+                                   matrix='bt709',
+                                   primaries='bt709',
+                                   range='limited')
+        elif preserve_hdr:
+            # Preserve HDR10 color space and transfer characteristics
+            logger.info("Preserving HDR10 metadata (BT.2020, PQ transfer)")
+            stream = stream.filter('zscale',
+                                   matrix='bt2020nc',
+                                   transfer='smpte2084',  # PQ transfer for HDR10
+                                   primaries='bt2020',
+                                   range='limited')
+        return stream
+
     def extract_frames_to_files(
         self,
         output_dir: str,
@@ -78,26 +116,8 @@ class HDRFrameExtractor:
         if end_frame is not None:
             stream = stream.filter('select', f'lte(n,{end_frame})')
 
-        # Apply tone mapping if requested
-        if tonemap_method and not preserve_hdr:
-            logger.info(f"Applying {tonemap_method} tone mapping")
-            stream = stream.filter('zscale',
-                                   transfer='linear',
-                                   npl=100)
-            stream = stream.filter('tonemap', tonemap_method)
-            stream = stream.filter('zscale',
-                                   transfer='bt709',
-                                   matrix='bt709',
-                                   primaries='bt709',
-                                   range='limited')
-        elif preserve_hdr:
-            # Preserve HDR10 color space and transfer characteristics
-            logger.info("Preserving HDR10 metadata (BT.2020, PQ transfer)")
-            stream = stream.filter('zscale',
-                                   matrix='bt2020nc',
-                                   transfer='smpte2084',  # PQ transfer for HDR10
-                                   primaries='bt2020',
-                                   range='limited')
+        # Apply color processing (HDR preservation or tone mapping)
+        stream = self._apply_color_processing(stream, preserve_hdr, tonemap_method)
 
         # Output with HDR-compatible pixel format
         output_pattern = str(output_path / f'frame_%06d.{format}')
@@ -150,26 +170,8 @@ class HDRFrameExtractor:
         if end_time is not None:
             stream = stream.filter('trim', end=end_time)
 
-        # Apply tone mapping if requested
-        if tonemap_method and not preserve_hdr:
-            logger.info(f"Applying {tonemap_method} tone mapping")
-            stream = stream.filter('zscale',
-                                   transfer='linear',
-                                   npl=100)
-            stream = stream.filter('tonemap', tonemap_method)
-            stream = stream.filter('zscale',
-                                   transfer='bt709',
-                                   matrix='bt709',
-                                   primaries='bt709',
-                                   range='limited')
-        elif preserve_hdr:
-            # Preserve HDR10 color space and transfer characteristics
-            logger.info("Preserving HDR10 metadata (BT.2020, PQ transfer)")
-            stream = stream.filter('zscale',
-                                   matrix='bt2020nc',
-                                   transfer='smpte2084',  # PQ transfer for HDR10
-                                   primaries='bt2020',
-                                   range='limited')
+        # Apply color processing (HDR preservation or tone mapping)
+        stream = self._apply_color_processing(stream, preserve_hdr, tonemap_method)
 
         # Output to pipe
         stream = ffmpeg.output(stream, 'pipe:', format='rawvideo', pix_fmt=pix_fmt)
