@@ -177,11 +177,14 @@ class HDRFrameExtractor:
         dtype = np.uint16 if pix_fmt == 'rgb48be' else np.uint8
 
         # Start FFmpeg process
+        # shell=False ensures arguments are passed directly to ffmpeg without shell interpretation,
+        # preventing command injection attacks
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=frame_size * batch_size
+            bufsize=frame_size * batch_size,
+            shell=False
         )
 
         frame_num = 0
