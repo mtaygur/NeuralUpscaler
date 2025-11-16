@@ -9,10 +9,11 @@ It filters out low-quality frames based on multiple criteria:
 4. Low contrast (single-tone images)
 """
 
-import numpy as np
-import cv2
-from typing import Dict, Optional, Tuple
 from dataclasses import dataclass
+from typing import Optional, Tuple
+
+import cv2
+import numpy as np
 
 
 @dataclass

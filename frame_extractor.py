@@ -3,12 +3,12 @@ Frame extractor for 4K HDR10 MKV files.
 Extracts frames while preserving HDR metadata for post-processing.
 """
 
-import ffmpeg
-import numpy as np
+import logging
 from pathlib import Path
 from typing import Generator, Optional, Tuple, Iterator
-import logging
-import os
+
+import ffmpeg
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
