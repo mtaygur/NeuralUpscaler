@@ -5,6 +5,7 @@ Converts HDR10 content to SDR intermediate for frame extraction.
 
 import subprocess
 from pathlib import Path
+from fractions import Fraction
 
 import ffmpeg
 
@@ -28,8 +29,21 @@ class HDRPreprocessor:
 
         self.width = int(self.video_stream['width'])
         self.height = int(self.video_stream['height'])
-        self.fps = eval(self.video_stream['r_frame_rate'])
+        self.fps = self._parse_fps(self.video_stream)
         self.duration = self._get_duration()
+
+    @staticmethod
+    def _parse_fps(stream: dict) -> float:
+        """Safely parse FPS from a video stream, trying common keys."""
+        for key in ("r_frame_rate", "avg_frame_rate"):
+            val = stream.get(key)
+            try:
+                # Fraction can handle strings like "24000/1001"
+                if val and val != "0/0":
+                    return float(Fraction(str(val)))
+            except (ValueError, ZeroDivisionError):
+                continue  # Ignore malformed or zero-denominator values
+        raise ValueError("Cannot determine FPS from probe data")
 
     def _get_duration(self) -> float:
         if 'duration' in self.video_stream:
@@ -77,7 +91,7 @@ class HDRPreprocessor:
             str(output_path)
         ]
 
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=3600, shell=False)
         return output_path
 
     def _build_filter_chain(
@@ -87,6 +101,23 @@ class HDRPreprocessor:
         deband: bool
     ) -> list:
         """Build FFmpeg filter chain for HDR to SDR conversion."""
+
+        # Validate and normalize tonemap_method
+        allowed_tonemap = {"hable", "reinhard", "mobius"}
+        if not isinstance(tonemap_method, str):
+            raise TypeError("tonemap_method must be a string")
+        tonemap_method = tonemap_method.lower().strip()
+        if tonemap_method not in allowed_tonemap:
+            raise ValueError(
+                f"Invalid tonemap_method: {tonemap_method!r}. Allowed: {sorted(allowed_tonemap)}"
+            )
+
+        # Validate peak_nits range and type
+        if not isinstance(peak_nits, int):
+            raise TypeError("peak_nits must be an integer number of nits")
+        if not (100 <= peak_nits <= 10000):
+            raise ValueError("peak_nits must be in the range [100, 10000]")
+
         filters = [
             # HDR to Linear light
             f'zscale=transfer=linear:npl={peak_nits}',
