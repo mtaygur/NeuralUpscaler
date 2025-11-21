@@ -6,12 +6,23 @@ Converts HDR10 content to SDR intermediate or processes SDR content for frame ex
 import subprocess
 from pathlib import Path
 from fractions import Fraction
+from dataclasses import dataclass, field
 
 import ffmpeg
 
 
+@dataclass
+class HdrTonemapOptions:
+    """Options for HDR to SDR tone mapping."""
+    method: str = 'hable'
+    peak_nits: int = 1000
+    desat: float = 2.0
+
+
 class Preprocessor:
     """Preprocess video files for neural network training data extraction."""
+
+    _ALLOWED_TONEMAP_METHODS = {"hable", "reinhard", "mobius"}
 
     def __init__(self, input_file: str):
         self.input_file = Path(input_file)
@@ -65,13 +76,14 @@ class Preprocessor:
         hdr_transfers = {'smpte2084', 'arib-std-b67'}  # PQ and HLG
         hdr_primaries = {'bt2020'}
 
-        is_hdr_transfer = color_transfer.lower() in hdr_transfers
-        is_hdr_primaries = color_primaries.lower() in hdr_primaries
+        is_hdr_transfer = (color_transfer or '').lower() in hdr_transfers
+        is_hdr_primaries = (color_primaries or '').lower() in hdr_primaries
 
         # Also check for side data containing HDR metadata
         side_data_list = self.video_stream.get('side_data_list', [])
         has_hdr_metadata = any(
-            'mastering_display' in str(sd).lower() or 'content_light' in str(sd).lower()
+            'mastering display metadata' in sd.get('side_data_type', '').lower() or
+            'content light level metadata' in sd.get('side_data_type', '').lower()
             for sd in side_data_list
         )
 
@@ -80,8 +92,7 @@ class Preprocessor:
     def preprocess(
         self,
         output_file: str,
-        tonemap_method: str = 'hable',
-        peak_nits: int = 1000,
+        hdr_options: HdrTonemapOptions = field(default_factory=HdrTonemapOptions),
         deband: bool = False,
         num_threads: int = 0
     ) -> Path:
@@ -93,9 +104,8 @@ class Preprocessor:
 
         Args:
             output_file: Path for output intermediate file
-            tonemap_method: Tone mapping algorithm ('hable', 'reinhard', 'mobius') - HDR only
-            peak_nits: Source peak luminance in nits - HDR only
-            deband: Apply debanding filter (removes color banding artifacts)
+            hdr_options: Tone mapping options for HDR to SDR conversion.
+            deband: Apply debanding filter.
             num_threads: Number of threads (0 = auto-detect)
 
         Returns:
@@ -105,7 +115,7 @@ class Preprocessor:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         if self.is_hdr:
-            filters = self._build_hdr_filter_chain(tonemap_method, peak_nits, deband)
+            filters = self._build_hdr_filter_chain(hdr_options, deband)
         else:
             filters = self._build_sdr_filter_chain(deband)
 
@@ -120,38 +130,41 @@ class Preprocessor:
             str(output_path)
         ]
 
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=3600, shell=False)
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=3600, shell=False)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"FFmpeg conversion failed: {e.stderr}") from e
+
         return output_path
 
+    @staticmethod
     def _build_hdr_filter_chain(
-        self,
-        tonemap_method: str,
-        peak_nits: int,
+            hdr_options: HdrTonemapOptions,
         deband: bool
     ) -> list:
         """Build FFmpeg filter chain for HDR to SDR conversion."""
 
         # Validate and normalize tonemap_method
         allowed_tonemap = {"hable", "reinhard", "mobius"}
-        if not isinstance(tonemap_method, str):
+        if not isinstance(hdr_options.method, str):
             raise TypeError("tonemap_method must be a string")
-        tonemap_method = tonemap_method.lower().strip()
+        tonemap_method = hdr_options.method.lower().strip()
         if tonemap_method not in allowed_tonemap:
             raise ValueError(
                 f"Invalid tonemap_method: {tonemap_method!r}. Allowed: {sorted(allowed_tonemap)}"
             )
 
         # Validate peak_nits range and type
-        if not isinstance(peak_nits, int):
+        if not isinstance(hdr_options.peak_nits, int):
             raise TypeError("peak_nits must be an integer number of nits")
-        if not (100 <= peak_nits <= 10000):
+        if not (100 <= hdr_options.peak_nits <= 10000):
             raise ValueError("peak_nits must be in the range [100, 10000]")
 
         filters = [
             # HDR to Linear light
-            f'zscale=transfer=linear:npl={peak_nits}',
+            f'zscale=transfer=linear:npl={hdr_options.peak_nits}',
             # Apply tone mapping with desaturation for out-of-gamut colors
-            f'tonemap={tonemap_method}:desat=2:peak={peak_nits}',
+            f'tonemap={tonemap_method}:desat=2:peak={hdr_options.peak_nits}',
             # Linear to BT.709 SDR
             'zscale=transfer=bt709:matrix=bt709:primaries=bt709:range=limited',
             # Format conversion
@@ -164,7 +177,8 @@ class Preprocessor:
 
         return filters
 
-    def _build_sdr_filter_chain(self, deband: bool) -> list:
+    @staticmethod
+    def _build_sdr_filter_chain(deband: bool) -> list:
         """Build FFmpeg filter chain for SDR content processing."""
         filters = [
             # Ensure consistent color space (BT.709 SDR)
