@@ -167,6 +167,12 @@ class Preprocessor:
 
         return is_hdr_transfer or is_hdr_primaries or has_hdr_metadata
 
+    def _detect_interlacing(self) -> bool:
+        """Detect if the video stream is interlaced."""
+        field_order = self.video_stream.get('field_order', 'unknown')
+        # tt = top field first, bb = bottom field first, tb/bt = mixed
+        return field_order in ('tt', 'bb', 'tb', 'bt')
+
     def _validate_and_convert_interval(self, interval: FrameInterval | None) -> tuple[float | None, float | None]:
         """
         Validate frame interval bounds and convert to time-based values.
@@ -309,8 +315,8 @@ class Preprocessor:
 
         return output_path
 
-    @staticmethod
     def _build_hdr_filter_chain(
+            self,
             hdr_options: HdrTonemapOptions,
         deband: bool
     ) -> list:
@@ -332,7 +338,13 @@ class Preprocessor:
         if not (100 <= hdr_options.peak_nits <= 10000):
             raise ValueError("peak_nits must be in the range [100, 10000]")
 
-        filters = [
+        filters = []
+
+        # Add deinterlacing if needed (before color conversions)
+        if self._detect_interlacing():
+            filters.append('bwdif=mode=send_frame:parity=auto:deint=all')
+
+        filters.extend([
             # HDR to Linear light
             f'zscale=transfer=linear:npl={hdr_options.peak_nits}',
             # Apply tone mapping with desaturation for out-of-gamut colors
@@ -341,7 +353,7 @@ class Preprocessor:
             'zscale=transfer=bt709:matrix=bt709:primaries=bt709:range=limited',
             # Format conversion
             'format=rgb24'
-        ]
+        ])
 
         if deband:
             # Reduce color banding (common in gradients after tone mapping)
@@ -349,15 +361,20 @@ class Preprocessor:
 
         return filters
 
-    @staticmethod
-    def _build_sdr_filter_chain(deband: bool) -> list:
+    def _build_sdr_filter_chain(self, deband: bool) -> list:
         """Build FFmpeg filter chain for SDR content processing."""
-        filters = [
+        filters = []
+
+        # Add deinterlacing if needed (before color conversions)
+        if self._detect_interlacing():
+            filters.append('bwdif=mode=send_frame:parity=auto:deint=all')
+
+        filters.extend([
             # Ensure consistent color space (BT.709 SDR)
             'zscale=matrix=bt709:primaries=bt709:transfer=bt709:range=limited',
             # Format conversion to RGB24
             'format=rgb24'
-        ]
+        ])
 
         if deband:
             # Reduce color banding artifacts
