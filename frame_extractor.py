@@ -19,6 +19,48 @@ class HdrTonemapOptions:
     desat: float = 2.0
 
 
+@dataclass
+class FrameInterval:
+    """
+    Defines a frame interval for video processing.
+
+    Supports both time-based and frame-based intervals:
+    - Time-based: Use start_time and end_time (in seconds, float)
+    - Frame-based: Use start_frame and end_frame (integer frame indices)
+
+    If both are specified, time-based takes precedence.
+    If only one bound is specified, processing starts from beginning or goes to end.
+    """
+    start_time: float | None = None
+    end_time: float | None = None
+    start_frame: int | None = None
+    end_frame: int | None = None
+
+    def __post_init__(self):
+        """Validate frame interval parameters."""
+        # Check that at least one parameter is specified
+        if all(x is None for x in [self.start_time, self.end_time, self.start_frame, self.end_frame]):
+            raise ValueError("At least one interval bound must be specified")
+
+        # Validate time-based parameters
+        if self.start_time is not None and self.start_time < 0:
+            raise ValueError("start_time must be non-negative")
+        if self.end_time is not None and self.end_time < 0:
+            raise ValueError("end_time must be non-negative")
+        if self.start_time is not None and self.end_time is not None:
+            if self.end_time <= self.start_time:
+                raise ValueError("end_time must be greater than start_time")
+
+        # Validate frame-based parameters
+        if self.start_frame is not None and self.start_frame < 0:
+            raise ValueError("start_frame must be non-negative")
+        if self.end_frame is not None and self.end_frame < 0:
+            raise ValueError("end_frame must be non-negative")
+        if self.start_frame is not None and self.end_frame is not None:
+            if self.end_frame <= self.start_frame:
+                raise ValueError("end_frame must be greater than start_frame")
+
+
 class Preprocessor:
     """Preprocess video files for neural network training data extraction."""
 
@@ -89,12 +131,67 @@ class Preprocessor:
 
         return is_hdr_transfer or is_hdr_primaries or has_hdr_metadata
 
+    def _validate_and_convert_interval(self, interval: FrameInterval | None) -> tuple[float | None, float | None]:
+        """
+        Validate frame interval bounds and convert to time-based values.
+
+        Args:
+            interval: FrameInterval object or None
+
+        Returns:
+            Tuple of (start_time, end_time) in seconds, or (None, None) if no interval
+
+        Raises:
+            ValueError: If interval bounds exceed video duration or frame count
+        """
+        if interval is None:
+            return None, None
+
+        start_time = None
+        end_time = None
+
+        # Time-based takes precedence
+        if interval.start_time is not None or interval.end_time is not None:
+            start_time = interval.start_time
+            end_time = interval.end_time
+        # Otherwise use frame-based and convert to time
+        elif interval.start_frame is not None or interval.end_frame is not None:
+            if interval.start_frame is not None:
+                start_time = interval.start_frame / self.fps
+            if interval.end_frame is not None:
+                end_time = interval.end_frame / self.fps
+
+        # Validate bounds against video duration
+        if start_time is not None and start_time >= self.duration:
+            raise ValueError(
+                f"start_time ({start_time:.2f}s) must be less than video duration ({self.duration:.2f}s)"
+            )
+        if end_time is not None and end_time > self.duration:
+            raise ValueError(
+                f"end_time ({end_time:.2f}s) exceeds video duration ({self.duration:.2f}s)"
+            )
+
+        # Validate frame indices against total frames if frame-based
+        if interval.start_frame is not None or interval.end_frame is not None:
+            total_frames = int(self.duration * self.fps)
+            if interval.start_frame is not None and interval.start_frame >= total_frames:
+                raise ValueError(
+                    f"start_frame ({interval.start_frame}) must be less than total frames ({total_frames})"
+                )
+            if interval.end_frame is not None and interval.end_frame > total_frames:
+                raise ValueError(
+                    f"end_frame ({interval.end_frame}) exceeds total frames ({total_frames})"
+                )
+
+        return start_time, end_time
+
     def preprocess(
         self,
         output_file: str,
         hdr_options: HdrTonemapOptions = field(default_factory=HdrTonemapOptions),
         deband: bool = False,
-        num_threads: int = 0
+        num_threads: int = 0,
+        frame_interval: FrameInterval | None = None
     ) -> Path:
         """
         Convert video to intermediate file suitable for frame extraction.
@@ -107,6 +204,8 @@ class Preprocessor:
             hdr_options: Tone mapping options for HDR to SDR conversion.
             deband: Apply debanding filter.
             num_threads: Number of threads (0 = auto-detect)
+            frame_interval: Optional frame interval for processing a subset of the video.
+                          If None, processes the entire video.
 
         Returns:
             Path to generated intermediate file
@@ -114,21 +213,37 @@ class Preprocessor:
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Validate and convert frame interval to time-based bounds
+        start_time, end_time = self._validate_and_convert_interval(frame_interval)
+
         if self.is_hdr:
             filters = self._build_hdr_filter_chain(hdr_options, deband)
         else:
             filters = self._build_sdr_filter_chain(deband)
 
-        cmd = [
-            'ffmpeg',
-            '-i', str(self.input_file),
+        # Build FFmpeg command
+        cmd = ['ffmpeg']
+
+        # Add start time if specified (seek to start position)
+        if start_time is not None:
+            cmd.extend(['-ss', str(start_time)])
+
+        # Add input file
+        cmd.extend(['-i', str(self.input_file)])
+
+        # Add end time if specified
+        if end_time is not None:
+            cmd.extend(['-to', str(end_time)])
+
+        # Add filters and encoding options
+        cmd.extend([
             '-vf', ','.join(filters),
             '-c:v', 'ffv1',  # Lossless codec
             '-pix_fmt', 'rgb24',
             '-threads', str(num_threads),
             '-y',  # Overwrite
             str(output_path)
-        ]
+        ])
 
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=3600, shell=False)
