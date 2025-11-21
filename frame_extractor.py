@@ -175,33 +175,22 @@ class Preprocessor:
             raise ValueError("At least one interval bound (start_time or end_time) must be specified")
 
         # Validate types
-        if start_time is not None and not isinstance(start_time, (int, float)):
-            raise TypeError(f"start_time must be a number, got {type(start_time).__name__}")
-        if end_time is not None and not isinstance(end_time, (int, float)):
-            raise TypeError(f"end_time must be a number, got {type(end_time).__name__}")
+        if (start_time is not None and not isinstance(start_time, (int, float))) or \
+           (end_time is not None and not isinstance(end_time, (int, float))):
+            raise TypeError("Interval times must be numeric values")
 
-        # Validate non-negativity
-        if start_time is not None and start_time < 0:
-            raise ValueError("start_time must be non-negative")
-        if end_time is not None and end_time < 0:
-            raise ValueError("end_time must be non-negative")
+        # Validate non-negativity and bounds
+        if (start_time is not None and start_time < 0) or (end_time is not None and end_time < 0):
+            raise ValueError("Interval times must be non-negative")
 
         # Validate relative ordering
-        if start_time is not None and end_time is not None:
-            if end_time <= start_time:
-                raise ValueError(
-                    f"end_time ({end_time:.2f}s) must be greater than start_time ({start_time:.2f}s)"
-                )
+        if start_time is not None and end_time is not None and end_time <= start_time:
+            raise ValueError("end_time must be greater than start_time")
 
         # Validate bounds against video duration
-        if start_time is not None and start_time >= self.duration:
-            raise ValueError(
-                f"start_time ({start_time:.2f}s) must be less than video duration ({self.duration:.2f}s)"
-            )
-        if end_time is not None and end_time > self.duration:
-            raise ValueError(
-                f"end_time ({end_time:.2f}s) exceeds video duration ({self.duration:.2f}s)"
-            )
+        if (start_time is not None and start_time >= self.duration) or \
+           (end_time is not None and end_time > self.duration):
+            raise ValueError(f"Interval times must be within video duration ({self.duration:.2f}s)")
 
         return start_time, end_time
 
