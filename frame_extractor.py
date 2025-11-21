@@ -20,6 +20,82 @@ class HdrTonemapOptions:
 
 
 @dataclass
+class DebandOptions:
+    """
+    Options for FFmpeg deband filter to reduce color banding artifacts.
+
+    Color banding appears as visible steps in gradients instead of smooth transitions.
+    Common in gradients, skies, and after heavy compression or tone mapping.
+    """
+    enabled: bool = True
+    threshold_plane1: float = 0.02  # First plane threshold (Y in YUV, R in RGB)
+    threshold_plane2: float = 0.02  # Second plane threshold (U in YUV, G in RGB)
+    threshold_plane3: float = 0.02  # Third plane threshold (V in YUV, B in RGB)
+    range: int = 16  # Banding detection range in pixels
+    blur: bool = True  # Apply blur to debanded pixels
+
+    def __post_init__(self):
+        """Validate debanding parameters."""
+        # Validate threshold values (FFmpeg valid range: 0.00001 to 0.5)
+        for plane_num, threshold in enumerate([
+            self.threshold_plane1,
+            self.threshold_plane2,
+            self.threshold_plane3
+        ], 1):
+            if not isinstance(threshold, (int, float)):
+                raise TypeError(f"threshold_plane{plane_num} must be a number")
+            if not (0.00001 <= threshold <= 0.5):
+                raise ValueError(
+                    f"threshold_plane{plane_num} must be in range [0.00001, 0.5], got {threshold}"
+                )
+
+        # Validate range (FFmpeg valid range: 1 to 64)
+        if not isinstance(self.range, int):
+            raise TypeError("range must be an integer")
+        if not (1 <= self.range <= 64):
+            raise ValueError(f"range must be in [1, 64], got {self.range}")
+
+        if not isinstance(self.blur, bool):
+            raise TypeError("blur must be a boolean")
+
+
+@dataclass
+class HardwareAccelOptions:
+    """
+    Options for hardware-accelerated decoding in FFmpeg.
+
+    Hardware acceleration can significantly speed up decoding but may have
+    compatibility issues depending on your system configuration.
+    """
+    enabled: bool = False
+    method: str = 'auto'  # 'auto', 'cuda', 'vaapi', 'qsv', 'videotoolbox', 'dxva2', 'd3d11va'
+    device: str = ''  # Device specifier (e.g., '/dev/dri/renderD128' for VAAPI, '0' for CUDA)
+
+    def __post_init__(self):
+        """Validate hardware acceleration options."""
+        allowed_methods = {
+            'auto', 'cuda', 'vaapi', 'qsv', 'videotoolbox',
+            'dxva2', 'd3d11va', 'vdpau', 'opencl'
+        }
+
+        if not isinstance(self.method, str):
+            raise TypeError("method must be a string")
+
+        method_lower = self.method.lower().strip()
+        if method_lower not in allowed_methods:
+            raise ValueError(
+                f"Invalid hardware acceleration method: {self.method!r}. "
+                f"Allowed: {sorted(allowed_methods)}"
+            )
+
+        # Normalize the method
+        self.method = method_lower
+
+        if not isinstance(self.device, str):
+            raise TypeError("device must be a string")
+
+
+@dataclass
 class FrameInterval:
     """
     Defines a frame interval for video processing.
@@ -189,9 +265,11 @@ class Preprocessor:
         self,
         output_file: str,
         hdr_options: HdrTonemapOptions = field(default_factory=HdrTonemapOptions),
-        deband: bool = False,
+        deband_options: DebandOptions | None = None,
+        hwaccel_options: HardwareAccelOptions | None = None,
         num_threads: int = 0,
-        frame_interval: FrameInterval | None = None
+        frame_interval: FrameInterval | None = None,
+        dry_run: bool = False
     ) -> Path:
         """
         Convert video to intermediate file suitable for frame extraction.
@@ -202,13 +280,15 @@ class Preprocessor:
         Args:
             output_file: Path for output intermediate file
             hdr_options: Tone mapping options for HDR to SDR conversion.
-            deband: Apply debanding filter.
+            deband_options: Debanding filter options. If None, debanding is disabled.
+            hwaccel_options: Hardware acceleration options for decoding. If None, software decoding is used.
             num_threads: Number of threads (0 = auto-detect)
             frame_interval: Optional frame interval for processing a subset of the video.
                           If None, processes the entire video.
+            dry_run: If True, print the FFmpeg command without executing it.
 
         Returns:
-            Path to generated intermediate file
+            Path to generated intermediate file (or output path if dry_run=True)
         """
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -217,12 +297,23 @@ class Preprocessor:
         start_time, end_time = self._validate_and_convert_interval(frame_interval)
 
         if self.is_hdr:
-            filters = self._build_hdr_filter_chain(hdr_options, deband)
+            filters = self._build_hdr_filter_chain(hdr_options, deband_options)
         else:
-            filters = self._build_sdr_filter_chain(deband)
+            filters = self._build_sdr_filter_chain(deband_options)
 
         # Build FFmpeg command
         cmd = ['ffmpeg']
+
+        # Add hardware acceleration options if enabled
+        if hwaccel_options and hwaccel_options.enabled:
+            if hwaccel_options.method != 'auto':
+                cmd.extend(['-hwaccel', hwaccel_options.method])
+            else:
+                cmd.extend(['-hwaccel', 'auto'])
+
+            # Add device if specified
+            if hwaccel_options.device:
+                cmd.extend(['-hwaccel_device', hwaccel_options.device])
 
         # Add start time if specified (seek to start position)
         if start_time is not None:
@@ -245,6 +336,12 @@ class Preprocessor:
             str(output_path)
         ])
 
+        # Handle dry run mode
+        if dry_run:
+            print("Dry run mode - FFmpeg command that would be executed:")
+            print(' '.join(cmd))
+            return output_path
+
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=3600, shell=False)
         except subprocess.CalledProcessError as e:
@@ -255,7 +352,7 @@ class Preprocessor:
     @staticmethod
     def _build_hdr_filter_chain(
             hdr_options: HdrTonemapOptions,
-        deband: bool
+        deband_options: DebandOptions | None
     ) -> list:
         """Build FFmpeg filter chain for HDR to SDR conversion."""
 
@@ -286,14 +383,23 @@ class Preprocessor:
             'format=rgb24'
         ]
 
-        if deband:
+        if deband_options and deband_options.enabled:
             # Reduce color banding (common in gradients after tone mapping)
-            filters.append('deband=1thr=0.02:2thr=0.02:3thr=0.02:blur=1')
+            blur_val = '1' if deband_options.blur else '0'
+            deband_filter = (
+                f'deband='
+                f'1thr={deband_options.threshold_plane1}:'
+                f'2thr={deband_options.threshold_plane2}:'
+                f'3thr={deband_options.threshold_plane3}:'
+                f'range={deband_options.range}:'
+                f'blur={blur_val}'
+            )
+            filters.append(deband_filter)
 
         return filters
 
     @staticmethod
-    def _build_sdr_filter_chain(deband: bool) -> list:
+    def _build_sdr_filter_chain(deband_options: DebandOptions | None) -> list:
         """Build FFmpeg filter chain for SDR content processing."""
         filters = [
             # Ensure consistent color space (BT.709 SDR)
@@ -302,8 +408,17 @@ class Preprocessor:
             'format=rgb24'
         ]
 
-        if deband:
+        if deband_options and deband_options.enabled:
             # Reduce color banding artifacts
-            filters.append('deband=1thr=0.02:2thr=0.02:3thr=0.02:blur=1')
+            blur_val = '1' if deband_options.blur else '0'
+            deband_filter = (
+                f'deband='
+                f'1thr={deband_options.threshold_plane1}:'
+                f'2thr={deband_options.threshold_plane2}:'
+                f'3thr={deband_options.threshold_plane3}:'
+                f'range={deband_options.range}:'
+                f'blur={blur_val}'
+            )
+            filters.append(deband_filter)
 
         return filters
