@@ -55,19 +55,6 @@ class HardwareAccelOptions:
             raise TypeError("device must be a string")
 
 
-@dataclass
-class FrameInterval:
-    """
-    Defines a time-based interval for video processing.
-
-    Specify start_time and/or end_time in seconds (float).
-    If only one bound is specified, processing starts from beginning or goes to end.
-    All validation is performed when the interval is used with a specific video.
-    """
-    start_time: float | None = None
-    end_time: float | None = None
-
-
 class Preprocessor:
     """Preprocess video files for neural network training data extraction."""
 
@@ -144,53 +131,45 @@ class Preprocessor:
         # tt = top field first, bb = bottom field first, tb/bt = mixed
         return field_order in ('tt', 'bb', 'tb', 'bt')
 
-    def _validate_interval(self, interval: FrameInterval | None) -> tuple[float | None, float | None]:
+    def _validate_interval(
+        self,
+        start_time: float | None,
+        end_time: float | None
+    ) -> tuple[float | None, float | None]:
         """
         Validate time interval bounds against video properties.
 
-        All validation is performed here in a single location:
-        - Checks that at least one bound is specified
-        - Validates non-negativity of time values
-        - Ensures end_time > start_time when both are specified
-        - Validates bounds against video duration
-
         Args:
-            interval: FrameInterval object or None
+            start_time: Start time in seconds, or None to start from beginning
+            end_time: End time in seconds, or None to process until end
 
         Returns:
-            Tuple of (start_time, end_time) in seconds, or (None, None) if no interval
+            Tuple of (start_time, end_time) in seconds, or (None, None) if both are None
 
         Raises:
             ValueError: If interval parameters are invalid or exceed video duration
-            TypeError: If interval parameters are not of the correct type
         """
-        if interval is None:
+        if start_time is None and end_time is None:
             return None, None
 
-        start_time = interval.start_time
-        end_time = interval.end_time
+        # Validate start_time
+        if start_time is not None:
+            if start_time < 0:
+                raise ValueError("start_time must be non-negative")
+            if start_time >= self.duration:
+                raise ValueError(f"start_time must be less than video duration ({self.duration:.2f}s)")
 
-        # Check that at least one bound is specified
-        if start_time is None and end_time is None:
-            raise ValueError("At least one interval bound (start_time or end_time) must be specified")
+        # Validate end_time
+        if end_time is not None:
+            if end_time < 0:
+                raise ValueError("end_time must be non-negative")
+            if end_time > self.duration:
+                raise ValueError(f"end_time must not exceed video duration ({self.duration:.2f}s)")
 
-        # Validate types
-        if (start_time is not None and not isinstance(start_time, (int, float))) or \
-           (end_time is not None and not isinstance(end_time, (int, float))):
-            raise TypeError("Interval times must be numeric values")
-
-        # Validate non-negativity and bounds
-        if (start_time is not None and start_time < 0) or (end_time is not None and end_time < 0):
-            raise ValueError("Interval times must be non-negative")
-
-        # Validate relative ordering
-        if start_time is not None and end_time is not None and end_time <= start_time:
-            raise ValueError("end_time must be greater than start_time")
-
-        # Validate bounds against video duration
-        if (start_time is not None and start_time >= self.duration) or \
-           (end_time is not None and end_time > self.duration):
-            raise ValueError(f"Interval times must be within video duration ({self.duration:.2f}s)")
+        # Validate ordering when both are specified
+        if start_time is not None and end_time is not None:
+            if end_time <= start_time:
+                raise ValueError("end_time must be greater than start_time")
 
         return start_time, end_time
 
@@ -201,7 +180,8 @@ class Preprocessor:
         deband: bool = False,
         hwaccel_options: HardwareAccelOptions | None = None,
         num_threads: int = 0,
-        frame_interval: FrameInterval | None = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
         dry_run: bool = False
     ) -> Path:
         """
@@ -216,8 +196,10 @@ class Preprocessor:
             deband: Apply debanding filter.
             hwaccel_options: Hardware acceleration options for decoding. If None, software decoding is used.
             num_threads: Number of threads (0 = auto-detect)
-            frame_interval: Optional time-based interval (in seconds) for processing a subset of the video.
-                          Specify start_time and/or end_time. If None, processes the entire video.
+            start_time: Optional start time in seconds for processing a subset of the video.
+                       If None, starts from the beginning.
+            end_time: Optional end time in seconds for processing a subset of the video.
+                     If None, processes until the end.
             dry_run: If True, print the FFmpeg command without executing it.
 
         Returns:
@@ -227,7 +209,7 @@ class Preprocessor:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Validate time interval bounds
-        start_time, end_time = self._validate_interval(frame_interval)
+        start_time, end_time = self._validate_interval(start_time, end_time)
 
         if self.is_hdr:
             filters = self._build_hdr_filter_chain(hdr_options, deband)
