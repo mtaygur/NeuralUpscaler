@@ -23,42 +23,15 @@ class HdrTonemapOptions:
 class HardwareAccelOptions:
     """
     Options for hardware-accelerated decoding in FFmpeg.
-
-    Hardware acceleration can significantly speed up decoding but may have
-    compatibility issues depending on your system configuration.
     """
     enabled: bool = False
     method: str = 'auto'  # 'auto', 'cuda', 'vaapi', 'qsv', 'videotoolbox', 'dxva2', 'd3d11va'
     device: str = ''  # Device specifier (e.g., '/dev/dri/renderD128' for VAAPI, '0' for CUDA)
 
-    def __post_init__(self):
-        """Validate hardware acceleration options."""
-        allowed_methods = {
-            'auto', 'cuda', 'vaapi', 'qsv', 'videotoolbox',
-            'dxva2', 'd3d11va', 'vdpau', 'opencl'
-        }
-
-        if not isinstance(self.method, str):
-            raise TypeError("method must be a string")
-
-        method_lower = self.method.lower().strip()
-        if method_lower not in allowed_methods:
-            raise ValueError(
-                f"Invalid hardware acceleration method: {self.method!r}. "
-                f"Allowed: {sorted(allowed_methods)}"
-            )
-
-        # Normalize the method
-        self.method = method_lower
-
-        if not isinstance(self.device, str):
-            raise TypeError("device must be a string")
 
 
 class Preprocessor:
     """Preprocess video files for neural network training data extraction."""
-
-    _ALLOWED_TONEMAP_METHODS = {"hable", "reinhard", "mobius"}
 
     def __init__(self, input_file: str):
         self.input_file = Path(input_file)
@@ -149,8 +122,6 @@ class Preprocessor:
         Raises:
             ValueError: If interval parameters are invalid or exceed video duration
         """
-        if start_time is None and end_time is None:
-            return None, None
 
         # Validate start_time
         if start_time is not None:
