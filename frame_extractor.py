@@ -251,16 +251,15 @@ class Preprocessor:
             str(output_path)
         ])
 
-        # Handle dry run mode
+        # Handle dry run mode or execute FFmpeg
         if dry_run:
             print("Dry run mode - FFmpeg command that would be executed:")
             print(' '.join(cmd))
-            return output_path
-
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=3600, shell=False)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"FFmpeg conversion failed: {e.stderr}") from e
+        else:
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=3600, shell=False)
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"FFmpeg conversion failed: {e.stderr}") from e
 
         return output_path
 
