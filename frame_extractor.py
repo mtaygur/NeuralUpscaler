@@ -234,6 +234,32 @@ class Preprocessor:
 
         return output_path
 
+    def _build_filter_chain(self, core_filters: list[str], deband: bool) -> list[str]:
+        """
+        Build a generic FFmpeg filter chain with common operations.
+
+        Args:
+            core_filters: List of content-specific filters (HDR or SDR).
+            deband: Apply debanding filter after core filters.
+
+        Returns:
+            Complete list of filter strings ready for FFmpeg.
+        """
+        filters = []
+
+        # Add deinterlacing if needed (before color conversions)
+        if self._detect_interlacing():
+            filters.append('bwdif=mode=send_frame:parity=auto:deint=all')
+
+        # Add core filters
+        filters.extend(core_filters)
+
+        # Add debanding if requested
+        if deband:
+            filters.append('deband=1thr=0.02:2thr=0.02:3thr=0.02:blur=1')
+
+        return filters
+
     def _build_hdr_filter_chain(
             self,
             hdr_options: HdrTonemapOptions,
@@ -257,13 +283,8 @@ class Preprocessor:
         if not (100 <= hdr_options.peak_nits <= 10000):
             raise ValueError("peak_nits must be in the range [100, 10000]")
 
-        filters = []
-
-        # Add deinterlacing if needed (before color conversions)
-        if self._detect_interlacing():
-            filters.append('bwdif=mode=send_frame:parity=auto:deint=all')
-
-        filters.extend([
+        # Build HDR-specific core filters
+        core_filters = [
             # HDR to Linear light
             f'zscale=transfer=linear:npl={hdr_options.peak_nits}',
             # Apply tone mapping with desaturation for out-of-gamut colors
@@ -272,31 +293,18 @@ class Preprocessor:
             'zscale=transfer=bt709:matrix=bt709:primaries=bt709:range=limited',
             # Format conversion
             'format=rgb24'
-        ])
+        ]
 
-        if deband:
-            # Reduce color banding (common in gradients after tone mapping)
-            filters.append('deband=1thr=0.02:2thr=0.02:3thr=0.02:blur=1')
-
-        return filters
+        return self._build_filter_chain(core_filters, deband)
 
     def _build_sdr_filter_chain(self, deband: bool) -> list:
         """Build FFmpeg filter chain for SDR content processing."""
-        filters = []
-
-        # Add deinterlacing if needed (before color conversions)
-        if self._detect_interlacing():
-            filters.append('bwdif=mode=send_frame:parity=auto:deint=all')
-
-        filters.extend([
+        # Build SDR-specific core filters
+        core_filters = [
             # Ensure consistent color space (BT.709 SDR)
             'zscale=matrix=bt709:primaries=bt709:transfer=bt709:range=limited',
             # Format conversion to RGB24
             'format=rgb24'
-        ])
+        ]
 
-        if deband:
-            # Reduce color banding artifacts
-            filters.append('deband=1thr=0.02:2thr=0.02:3thr=0.02:blur=1')
-
-        return filters
+        return self._build_filter_chain(core_filters, deband)
