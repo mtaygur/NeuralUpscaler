@@ -33,6 +33,26 @@ class HardwareAccelOptions:
 class Preprocessor:
     """Preprocess video files for neural network training data extraction."""
 
+    @staticmethod
+    def _detect_cuda_support() -> bool:
+        """
+        Detect if FFmpeg supports CUDA-accelerated H.265 encoding.
+
+        Returns:
+            True if hevc_nvenc encoder is available, False otherwise.
+        """
+        try:
+            result = subprocess.run(
+                ['ffmpeg', '-hide_banner', '-encoders'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            # Check if hevc_nvenc (NVIDIA CUDA H.265 encoder) is available
+            return 'hevc_nvenc' in result.stdout
+        except (subprocess.SubprocessError, FileNotFoundError):
+            return False
+
     def __init__(self, input_file: str):
         self.input_file = Path(input_file)
         if not self.input_file.exists():
@@ -187,11 +207,18 @@ class Preprocessor:
         else:
             filters = self._build_sdr_filter_chain(deband)
 
+        # Detect CUDA support for hardware acceleration
+        cuda_available = self._detect_cuda_support()
+
         # Build FFmpeg command
         cmd = ['ffmpeg']
 
-        # Add hardware acceleration options if enabled
-        if hwaccel_options and hwaccel_options.enabled:
+        # Enforce CUDA hardware acceleration if available
+        if cuda_available:
+            cmd.extend(['-hwaccel', 'cuda'])
+            cmd.extend(['-hwaccel_output_format', 'cuda'])
+        elif hwaccel_options and hwaccel_options.enabled:
+            # Fall back to user-specified hardware acceleration if CUDA not available
             if hwaccel_options.method != 'auto':
                 cmd.extend(['-hwaccel', hwaccel_options.method])
             else:
@@ -212,11 +239,32 @@ class Preprocessor:
         if end_time is not None:
             cmd.extend(['-to', str(end_time)])
 
+        # Configure H.265 encoding with CUDA acceleration if available
+        if cuda_available:
+            # Use NVIDIA CUDA-accelerated H.265 encoder
+            codec_params = [
+                '-c:v', 'hevc_nvenc',
+                '-preset', 'p7',  # Highest quality preset for NVENC (p1-p7)
+                '-cq', '16',  # Constant quality mode (CRF equivalent, 15-18 for visually lossless)
+                '-rc', 'vbr',  # Variable bitrate mode
+                '-pix_fmt', 'yuv420p10le',  # 10-bit color for better quality
+            ]
+        else:
+            # Fall back to software H.265 encoder
+            codec_params = [
+                '-c:v', 'libx265',
+                '-preset', 'slow',  # Higher quality preset for software encoding
+                '-crf', '16',  # Constant rate factor (15-18 for visually lossless)
+                '-pix_fmt', 'yuv420p10le',  # 10-bit color for better quality
+                '-x265-params', 'log-level=error',
+            ]
+
         # Add filters and encoding options
         cmd.extend([
             '-vf', ','.join(filters),
-            '-c:v', 'ffv1',  # Lossless codec
-            '-pix_fmt', 'rgb24',
+        ])
+        cmd.extend(codec_params)
+        cmd.extend([
             '-threads', str(num_threads),
             '-y',  # Overwrite
             str(output_path)
@@ -289,10 +337,10 @@ class Preprocessor:
             f'zscale=transfer=linear:npl={hdr_options.peak_nits}',
             # Apply tone mapping with desaturation for out-of-gamut colors
             f'tonemap={tonemap_method}:desat=2:peak={hdr_options.peak_nits}',
-            # Linear to BT.709 SDR
-            'zscale=transfer=bt709:matrix=bt709:primaries=bt709:range=limited',
-            # Format conversion
-            'format=rgb24'
+            # Linear to BT.709 SDR with 10-bit precision
+            'zscale=transfer=bt709:matrix=bt709:primaries=bt709:range=limited:dither=error_diffusion',
+            # Format conversion to 10-bit YUV 4:2:0
+            'format=yuv420p10le'
         ]
 
         return self._build_filter_chain(core_filters, deband)
@@ -301,10 +349,10 @@ class Preprocessor:
         """Build FFmpeg filter chain for SDR content processing."""
         # Build SDR-specific core filters
         core_filters = [
-            # Ensure consistent color space (BT.709 SDR)
-            'zscale=matrix=bt709:primaries=bt709:transfer=bt709:range=limited',
-            # Format conversion to RGB24
-            'format=rgb24'
+            # Ensure consistent color space (BT.709 SDR) with 10-bit precision
+            'zscale=matrix=bt709:primaries=bt709:transfer=bt709:range=limited:dither=error_diffusion',
+            # Format conversion to 10-bit YUV 4:2:0
+            'format=yuv420p10le'
         ]
 
         return self._build_filter_chain(core_filters, deband)
